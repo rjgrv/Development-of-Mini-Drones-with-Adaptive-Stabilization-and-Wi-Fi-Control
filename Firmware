@@ -1,0 +1,112 @@
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/mcpwm.h"
+#include "driver/gpio.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "nvs_flash.h"
+#include "esp_log.h"
+#include "MPU6050.h" // Include IMU library
+#include "PID.h"     // Include PID controller library
+
+#define MOTOR1_GPIO GPIO_NUM_12
+#define MOTOR2_GPIO GPIO_NUM_14
+#define MOTOR3_GPIO GPIO_NUM_27
+#define MOTOR4_GPIO GPIO_NUM_26
+#define IMU_SDA GPIO_NUM_21
+#define IMU_SCL GPIO_NUM_22
+
+static const char *TAG = "Drone";
+
+// IMU and PID setup
+MPU6050_t imu;
+PIDController pid_roll;
+PIDController pid_pitch;
+PIDController pid_yaw;
+
+float roll_setpoint = 0;
+float pitch_setpoint = 0;
+float yaw_setpoint = 0;
+
+// Motor control functions
+void init_motors() {
+    mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, MOTOR1_GPIO);
+    mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0B, MOTOR2_GPIO);
+    mcpwm_gpio_init(MCPWM_UNIT_1, MCPWM1A, MOTOR3_GPIO);
+    mcpwm_gpio_init(MCPWM_UNIT_1, MCPWM1B, MOTOR4_GPIO);
+
+    mcpwm_config_t pwm_config;
+    pwm_config.frequency = 50;    // 50Hz frequency
+    pwm_config.cmpr_a = 0;        // Initial duty cycle
+    pwm_config.cmpr_b = 0;
+    pwm_config.counter_mode = MCPWM_UP_COUNTER;
+    pwm_config.duty_mode = MCPWM_DUTY_MODE_0;
+
+    mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &pwm_config);
+    mcpwm_init(MCPWM_UNIT_1, MCPWM_TIMER_1, &pwm_config);
+}
+
+void set_motor_speed(uint8_t motor_id, float duty_cycle) {
+    duty_cycle = duty_cycle > 100 ? 100 : (duty_cycle < 0 ? 0 : duty_cycle);
+
+    switch (motor_id) {
+        case 1:
+            mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, duty_cycle);
+            break;
+        case 2:
+            mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, duty_cycle);
+            break;
+        case 3:
+            mcpwm_set_duty(MCPWM_UNIT_1, MCPWM_TIMER_1, MCPWM_OPR_A, duty_cycle);
+            break;
+        case 4:
+            mcpwm_set_duty(MCPWM_UNIT_1, MCPWM_TIMER_1, MCPWM_OPR_B, duty_cycle);
+            break;
+    }
+}
+
+// IMU Initialization
+void init_imu() {
+    if (MPU6050_Init(&imu, IMU_SCL, IMU_SDA) != ESP_OK) {
+        ESP_LOGE(TAG, "MPU6050 Initialization Failed");
+        vTaskDelay(portMAX_DELAY);
+    }
+    ESP_LOGI(TAG, "MPU6050 Initialized Successfully");
+}
+
+// Control Logic
+void control_task(void *param) {
+    while (1) {
+        MPU6050_Read_All(&imu);
+        float roll = imu.KalmanAngleX;
+        float pitch = imu.KalmanAngleY;
+        float yaw = imu.Gyro_Z;
+
+        float roll_output = pid_compute(&pid_roll, roll_setpoint - roll);
+        float pitch_output = pid_compute(&pid_pitch, pitch_setpoint - pitch);
+        float yaw_output = pid_compute(&pid_yaw, yaw_setpoint - yaw);
+
+        set_motor_speed(1, 50 + roll_output - pitch_output);
+        set_motor_speed(2, 50 - roll_output - pitch_output);
+        set_motor_speed(3, 50 + roll_output + pitch_output);
+        set_motor_speed(4, 50 - roll_output + pitch_output);
+
+        vTaskDelay(pdMS_TO_TICKS(20)); // Run at 50 Hz
+    }
+}
+
+// Main Function
+void app_main() {
+    nvs_flash_init();
+    init_motors();
+    init_imu();
+
+    pid_init(&pid_roll, 1.0, 0.0, 0.0);  // Replace with tuned values
+    pid_init(&pid_pitch, 1.0, 0.0, 0.0); // Replace with tuned values
+    pid_init(&pid_yaw, 1.0, 0.0, 0.0);   // Replace with tuned values
+
+    xTaskCreate(control_task, "Control Task", 2048, NULL, 10, NULL);
+
+    ESP_LOGI(TAG, "Drone Firmware Running");
+}
