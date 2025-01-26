@@ -1,0 +1,87 @@
+/*
+  DIY Mini Drone Altitude Control using Potentiometer and HC-SR04
+  Adjusted for max potentiometer value to set max height and minimum for landing.
+*/
+
+// define global variables
+
+// constants that don't change (the variables are read-only)
+const int triggerPin = 8;        // trigger pin for the ultrasonic sensor
+const int echoPin = 7;
+const int PWMPin = 10;           // pin for the motor PWM signal
+const int min_height = 0;        // minimum desired height in centimeters (ground level)
+const int max_height = 150;      // maximum desired height in centimeters 
+const float K = 3;               // proportional controller gain
+const int PWM_offset = 150;       // offset for PWM signal (hover level)
+
+// variables that can change
+int target_dist = 0;             // target distance in centimeters (set with potentiometer)
+int pot_reading = 0;             // potentiometer reading for altitude control
+long duration;                   // duration of the ultrasonic ping
+long cm;                         // measured distance in centimeters
+int PWM_signal = 0;              // PWM value
+int error = 0;                   // difference between target distance and measured distance
+
+void setup() {    // setup code that only runs once
+  pinMode(triggerPin, OUTPUT);    // set ultrasonic trigger pin as output
+  pinMode(echoPin, INPUT);        // set ultrasonic echo pin as input
+  pinMode(PWMPin, OUTPUT);        // set motor pin as output
+  Serial.begin(9600);             // initialize serial communication for debugging
+  LiftOff();                      // give drone a short boost to prevent bad sensor readings
+  delay(200);                     // wait briefly before entering loop
+}
+
+void loop() {
+  // Trigger the ultrasonic sensor
+  digitalWrite(triggerPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(triggerPin, HIGH);
+  delayMicroseconds(5);
+  digitalWrite(triggerPin, LOW);
+
+  // Measure duration of echo pulse
+  duration = pulseIn(echoPin, HIGH);
+
+  // Convert the time into a distance in centimeters
+  cm = microsecondsToCentimeters(duration);
+
+  // Altitude control using the potentiometer
+  pot_reading = analogRead(A0);                                  // read potentiometer for altitude control
+  target_dist = map(pot_reading, 0, 1023, min_height, max_height); // map potentiometer reading to height
+  error = target_dist - cm;                                       // calculate difference between target height and actual height
+  PWM_signal = K * error + PWM_offset;                            // proportional controller for altitude
+  if (PWM_signal > 255) {
+    PWM_signal = 255;                                             // limit PWM signal
+  } else if (PWM_signal < 0) {
+    PWM_signal = 0;
+  }
+
+  // Send PWM signal for altitude control
+  analogWrite(PWMPin, PWM_signal);    
+
+  // Debugging information
+  Serial.print("Target distance: ");
+  Serial.println(target_dist);
+  Serial.print("Measured distance: ");
+  Serial.println(cm);
+  Serial.print("Error: ");
+  Serial.println(error);
+  Serial.print("Altitude PWM: ");
+  Serial.println(PWM_signal);
+
+  // Small delay for stability
+  delay(100);
+}
+
+long microsecondsToCentimeters(long microseconds) {
+  return microseconds / 29 / 2;  // convert echo time to centimeters
+}
+
+void LiftOff() {         // slowly ramp up motor speed to lift off
+  int PWM_signal = 0;  // Initialize PWM_signal for lift-off
+  while (PWM_signal < PWM_offset) {
+    analogWrite(PWMPin, PWM_signal);
+    PWM_signal++;
+    delay(20); // Short delay for gradual lift-off
+  }
+}
